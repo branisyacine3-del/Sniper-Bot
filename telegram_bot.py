@@ -1,7 +1,8 @@
 # telegram_bot.py
-# نظام الاتصال المزدوج (إصلاح HTML)
+# نسخة تثبيت الأزرار (Persistent Keyboard)
 # -------------------------------------
 import requests
+import json
 import config
 
 class TelegramBot:
@@ -17,39 +18,61 @@ class TelegramBot:
         self.chat_id = config.CHAT_ID
         self.offset = 0
 
-    # إرسال رسالة عادية (عبر بوت التحكم)
+        # تصميم لوحة المفاتيح الثابتة
+        self.keyboard = json.dumps({
+            "keyboard": [
+                ["💰 الرصيد", "📡 فحص رادار"],
+                ["📸 شارت فوري", "📊 تقرير شامل"],
+                ["▶️ تشغيل", "🛑 إيقاف"]
+            ],
+            "resize_keyboard": True,
+            "is_persistent": True, # يجبر الأزرار على البقاء
+            "one_time_keyboard": False
+        })
+
+    # إرسال رسالة لبوت التحكم (مع الأزرار دائماً)
     def send_admin(self, message):
         try:
             url = self.control_url + "sendMessage"
-            data = {"chat_id": self.chat_id, "text": message, "parse_mode": "HTML"}
+            data = {
+                "chat_id": self.chat_id, 
+                "text": message, 
+                "parse_mode": "HTML",
+                "reply_markup": self.keyboard # إرفاق الأزرار مع كل رسالة
+            }
             requests.post(url, data=data, timeout=5)
         except: pass
 
-    # إرسال خبر أو صفقة (عبر بوت الرادار)
+    # إرسال لبوت الرادار (بدون أزرار)
     def send_news(self, message):
         try:
-            # نستخدم news_url هنا
             url = self.news_url + "sendMessage"
             data = {"chat_id": self.chat_id, "text": message, "parse_mode": "HTML"}
             requests.post(url, data=data, timeout=5)
         except: pass
 
-    # إرسال صورة (نحدد أي بوت نستخدم)
+    # إرسال صورة
     def send_photo(self, photo_buf, caption="", bot_type='news'):
         try:
             if bot_type == 'news':
                 url = self.news_url + "sendPhoto"
+                data = {"chat_id": self.chat_id, "caption": caption, "parse_mode": "HTML"}
             else:
+                # لبوت التحكم نرسل الأزرار مع الصورة أيضاً
                 url = self.control_url + "sendPhoto"
+                data = {
+                    "chat_id": self.chat_id, 
+                    "caption": caption, 
+                    "parse_mode": "HTML",
+                    "reply_markup": self.keyboard
+                }
                 
             photo_buf.seek(0)
             files = {'photo': photo_buf}
-            data = {"chat_id": self.chat_id, "caption": caption, "parse_mode": "HTML"}
             requests.post(url, data=data, files=files, timeout=10)
         except Exception as e:
             print(f"Photo Error: {e}")
 
-    # استقبال الأوامر (من بوت التحكم حصراً)
     def check_updates(self):
         try:
             url = self.control_url + "getUpdates"
