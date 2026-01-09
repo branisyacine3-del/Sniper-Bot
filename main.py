@@ -1,5 +1,5 @@
 # main.py
-# V24: Dual Bot System (Separated & Clean) 🦅
+# V25: Notifications & Persistent Buttons 🦅
 # -------------------------------------
 import ccxt
 import pandas as pd
@@ -114,9 +114,8 @@ def run_bot():
     ai = QuantModel()
     painter = ChartPainter()
     
-    # رسالة الترحيب ترسل لبوت التحكم
-    bot.show_keyboard("🦅 <b>V24: Dual System Active</b>\nتم فصل البوتات بنجاح:\n📡 الرادار: للأخبار والصفقات.\n🎮 التحكم: للأوامر والرصيد.")
-    print("🦅 V24 Running...")
+    bot.show_keyboard("🦅 <b>تم تحديث النظام</b>\n- الأزرار مثبتة.\n- إشعارات الدخول/الخروج مفعلة لبوت التحكم.")
+    print("🦅 V25 Running...")
     
     status = "RUNNING"
     last_radar_time = 0
@@ -126,43 +125,58 @@ def run_bot():
             current_time = time.time()
             price = market.get_price()
             
-            # 1. استقبال الأوامر (من بوت التحكم)
+            # استقبال الأوامر
             cmd = bot.check_updates()
             if cmd:
                 if "شارت" in cmd and price > 0:
-                    bot.send_admin("📸 جاري التحليل...")
+                    bot.send_admin("📸 جاري جلب الشارت...")
                     df = market.get_candles(config.TIMEFRAME)
                     if df is not None:
                         img = painter.draw_entry_chart(prepare_for_painter(df.tail(80)), price, price, price, "MANUAL")
-                        if img: bot.send_photo(img, f"Price: {price}", bot_type='admin') # يرسل للتحكم
+                        if img: bot.send_photo(img, f"سعر السوق: {price}", bot_type='admin')
                         try: img.close(); del img; del df; gc.collect()
                         except: pass
                 
                 elif "الرصيد" in cmd:
                     pnl = sum(engine.pnl_history)
-                    bot.send_admin(f"💰 Balance: {engine.balance:.2f}$\nPnL: {pnl:.2f}$")
+                    bot.send_admin(f"💰 <b>المحفظة:</b>\n💵 الرصيد الحالي: {engine.balance:.2f}$\n📈 الأرباح التراكمية: {pnl:.2f}$")
 
                 elif "تقرير" in cmd:
                     dz_time = datetime.now() + timedelta(hours=1)
-                    bot.send_admin(f"📊 Status: {status}\n🤖 Bots: Separated\n⏳ Time: {dz_time.strftime('%H:%M:%S')}")
+                    pos_msg = "كاش (خارج السوق)" if engine.position is None else f"مفتوحة ({engine.position['type']})"
+                    bot.send_admin(f"📊 <b>تقرير الحالة:</b>\nوضع البوت: {status}\nالصفقة الحالية: {pos_msg}\nالوقت: {dz_time.strftime('%H:%M')}")
 
-                elif "إيقاف" in cmd: status = "PAUSED"; bot.send_admin("⏸️ Paused")
-                elif "تشغيل" in cmd: status = "RUNNING"; bot.send_admin("▶️ Running")
+                elif "إيقاف" in cmd: status = "PAUSED"; bot.send_admin("⏸️ تم إيقاف الرادار مؤقتاً")
+                elif "تشغيل" in cmd: status = "RUNNING"; bot.send_admin("▶️ تم تشغيل الرادار")
 
-            # 2. الرادار (يرسل لبوت الأخبار)
+            # الرادار والصفقات
             if status == "RUNNING" and price > 0:
+                # 1. مراقبة إغلاق الصفقات
                 if engine.position:
                     pnl = engine.update_position(price)
                     if pnl != 0:
-                        emoji = "✅ PROFIT" if pnl > 0 else "🛑 STOP"
-                        # نتائج الصفقات ترسل للرادار (للجميع) والتحكم (لك)
-                        bot.send_news(f"{emoji} <b>Trade Closed:</b> {pnl:.2f}$") 
-                        bot.send_admin(f"{emoji} Trade Closed: {pnl:.2f}$")
-                
+                        # تصميم رسالة الإغلاق الجميلة
+                        if pnl > 0:
+                            header = "✅ <b>هدف (Take Profit)</b>"
+                            amount = f"+{pnl:.2f}$"
+                        else:
+                            header = "🛑 <b>وقف (Stop Loss)</b>"
+                            amount = f"{pnl:.2f}$"
+                        
+                        msg_admin = (
+                            f"{header}\n"
+                            f"💵 النتيجة: <b>{amount}</b>\n"
+                            f"💰 الرصيد الجديد: {engine.balance:.2f}$"
+                        )
+                        # إرسال لبوت التحكم (لك)
+                        bot.send_admin(msg_admin)
+                        # إرسال لبوت الأخبار (للناس)
+                        bot.send_news(f"{header} Closed: {amount}")
+
+                # 2. البحث عن فرص جديدة
                 if current_time - last_radar_time > 60: 
                     try:
                         df_1000 = market.get_candles(config.TIMEFRAME, limit=1000)
-                        
                         if df_1000 is not None:
                             pred, conf = ai.predict(df_1000)
                             btc_mood = market.get_btc_sentiment()
@@ -179,14 +193,29 @@ def run_bot():
                                     atr = (df_1000['high'] - df_1000['low']).mean()
                                     pos = engine.execute_trade(signal, price, atr)
                                     if pos:
+                                        # رسالة الدخول لبوت التحكم (لك)
+                                        admin_msg = (
+                                            f"🚀 <b>دخول صفقة جديدة!</b>\n"
+                                            f"النوع: {signal}\n"
+                                            f"السعر: {price}\n"
+                                            f"🎯 الهدف: {pos['tp']:.2f}\n"
+                                            f"🛡️ الوقف: {pos['sl']:.2f}"
+                                        )
+                                        bot.send_admin(admin_msg)
+                                        
+                                        # رسالة للعامة (أبسط)
                                         bot.send_news(f"🐋 <b>ENTRY:</b> {signal} @ {price}\n{vol_msg}")
+                                        
                                         try:
+                                            # رسم الشارت وإرساله للاثنين
                                             img = painter.draw_entry_chart(prepare_for_painter(df_1000.tail(60)), price, price, price, "ENTRY")
-                                            if img: bot.send_photo(img, "Sniper Entry", bot_type='news')
+                                            if img: 
+                                                bot.send_photo(img, "Sniper Entry", bot_type='news') # للعامة
+                                                bot.send_photo(img, "نقطة الدخول الرسمية", bot_type='admin') # لك
                                             img.close(); del img
                                         except: pass
 
-                            # الرادار العادي (يرسل لبوت الأخبار)
+                            # تحديث الرادار الدوري
                             ai_icon = "🐂 BULL" if pred == 1 else "🐻 BEAR"
                             msg = (
                                 f"📡 <b>RADAR SCAN</b>\n"
@@ -197,7 +226,7 @@ def run_bot():
                             )
                             try:
                                 img_radar = painter.draw_entry_chart(prepare_for_painter(df_1000.tail(60)), price, price, price, "RADAR")
-                                if img_radar: bot.send_photo(img_radar, msg, bot_type='news') # إرسال للرادار
+                                if img_radar: bot.send_photo(img_radar, msg, bot_type='news')
                                 img_radar.close(); del img_radar
                             except: pass
                             
