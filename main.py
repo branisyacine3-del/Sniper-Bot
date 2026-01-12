@@ -1,5 +1,5 @@
 # main.py
-# V27.5: TOTAL CONTROL (Fixed Buttons + Auto Radar) 🦅
+# V28: DATA STREAM FIXED (Binance Source) 🦅
 # -------------------------------------
 import ccxt
 import pandas as pd
@@ -20,7 +20,9 @@ keep_alive()
 # تهيئة الأدوات
 bot = TelegramBot()
 painter = ChartPainter()
-market = ccxt.kucoin()
+
+# التغيير الجوهري: استخدام Binance لجلب البيانات (أكثر استقراراً)
+market = ccxt.binance({'options': {'adjustForTimeDifference': True}})
 ai = QuantModel()
 
 class TradingEngine:
@@ -67,38 +69,56 @@ class TradingEngine:
                 del self.positions[sym]
         return closed_trades
 
-# دالة مساعدة لجلب أفضل عملة حالياً (تستخدم للأزرار وللرادار التلقائي)
+# دالة جلب البيانات (تم تحسينها لتجاوز الأخطاء)
 def get_best_market_opportunity():
     best_data = None
     highest_adx = -1
+    error_msg = ""
     
     for symbol in config.TARGETS:
         try:
+            # جلب الشموع من بينانس
             bars = market.fetch_ohlcv(symbol, config.TIMEFRAME, limit=60)
+            if not bars: continue
+            
             df = pd.DataFrame(bars, columns=['t', 'o', 'h', 'l', 'c', 'v'])
+            
+            # التأكد من وجود بيانات كافية للمؤشرات
+            if len(df) < 20: continue
+
             df.ta.adx(length=14, append=True)
+            
+            # التعامل مع احتمال نقص البيانات
+            if 'ADX_14' not in df.columns: continue
+            
             adx = df['ADX_14'].iloc[-1]
             price = df['c'].iloc[-1]
             
+            # تجاهل القيم غير الموجودة (NaN)
+            if pd.isna(adx): continue
+
             if adx > highest_adx:
                 highest_adx = adx
                 best_data = {
                     'symbol': symbol, 'price': price, 'adx': adx, 
                     'df': df, 'vol': df['v'].iloc[-1]
                 }
-        except: continue
-    return best_data
+        except Exception as e:
+            error_msg = str(e)
+            print(f"Error fetching {symbol}: {e}")
+            continue
+            
+    return best_data, error_msg
 
 def run_bot():
     engine = TradingEngine()
-    bot.show_keyboard("🦅 <b>V27.5: SYSTEM FULLY OPERATIONAL</b>\n- Auto Radar: Every 60s\n- Buttons: FIXED ✅")
+    bot.show_keyboard("🦅 <b>V28: CONNECTED TO BINANCE</b>\n- Data Stream: Stable 🟢\n- Auto Radar: Active")
     
-    last_radar_time = time.time() - 60 # ليعمل فوراً عند التشغيل
+    last_radar_time = time.time() - 60 
     
     while True:
         try:
-            # 1. معالجة الأزرار (أولوية)
-            # ---------------------------
+            # 1. معالجة الأزرار
             cmd = bot.get_updates()
             
             if cmd == "balance":
@@ -117,27 +137,26 @@ def run_bot():
                     bot.send_photo(img, f"🏆 <b>Performance</b>\nWin Rate: {win_rate:.1f}%", bot_type='admin')
                     img.close()
             
-            elif cmd == "scan": # زر فحص الرادار
-                data = get_best_market_opportunity()
+            elif cmd == "scan": 
+                data, err = get_best_market_opportunity()
                 if data:
                     msg = f"📡 <b>Manual Scan</b>\nTop: {data['symbol']}\nADX: {data['adx']:.1f}\nPrice: {data['price']}"
                     bot.send_admin(msg)
                 else:
-                    bot.send_admin("⚠️ Market Data Unavailable")
+                    # الآن سيخبرك بالسبب الحقيقي للخطأ
+                    bot.send_admin(f"⚠️ Data Error: {err if err else 'No strong targets'}")
 
-            elif cmd == "chart": # زر الشارت الفوري
-                data = get_best_market_opportunity()
+            elif cmd == "chart": 
+                data, _ = get_best_market_opportunity()
                 if data:
-                    # رسم شارت نظيف بدون خطوط دخول (للمراقبة فقط)
                     img = painter.draw_entry_chart(data['df'], data['price'], data['price']*0.9, data['price']*1.1, data['symbol'], mode="SCAN")
                     if img:
                         bot.send_photo(img, f"📸 <b>Instant Chart</b>\n{data['symbol']} @ {data['price']}", bot_type='admin')
                         img.close()
 
-            # 2. الرادار التلقائي (كل 60 ثانية)
-            # -----------------------------------
+            # 2. الرادار التلقائي
             if time.time() - last_radar_time > 60:
-                data = get_best_market_opportunity()
+                data, _ = get_best_market_opportunity()
                 if data:
                     trend_icon = "🔥" if data['adx'] > 25 else "💤"
                     msg = (
@@ -147,27 +166,20 @@ def run_bot():
                         f"📈 Trend Strength: {data['adx']:.1f} {trend_icon}\n"
                         f"🌊 Vol: {'High' if data['vol'] > 1000 else 'Normal'}"
                     )
-                    bot.send_news(msg) # يرسل لقناة الأخبار
+                    bot.send_news(msg) 
                     last_radar_time = time.time()
 
-            # 3. محرك التداول (فحص الدخول)
-            # ---------------------------
+            # 3. إدارة التداول
             current_prices = {}
+            # هنا نستخدم دورة سريعة لجلب الأسعار الحالية فقط
             for symbol in config.TARGETS:
                 try:
-                    bars = market.fetch_ohlcv(symbol, config.TIMEFRAME, limit=50)
-                    price = bars[-1][4]
-                    current_prices[symbol] = price
-                    
-                    # نستخدم المؤشرات المحسوبة سابقاً لتوفير الوقت
-                    # هنا نضيف شرط الدخول الحقيقي...
-                    # (تم الاختصار لضمان سرعة الاستجابة للأزرار)
+                    ticker = market.fetch_ticker(symbol)
+                    current_prices[symbol] = ticker['last']
                 except: continue
 
-            # إدارة الصفقات المفتوحة
             engine.manage_positions(current_prices)
-            
-            time.sleep(1) # تقليل الانتظار لتسريع الأزرار
+            time.sleep(1) 
 
         except Exception as e:
             print(f"Loop Error: {e}")
