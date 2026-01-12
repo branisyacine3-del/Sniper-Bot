@@ -6,3 +6,4 @@ mplfinance
 matplotlib
 numpy
 pandas_ta
+yfinance
