@@ -1,58 +1,40 @@
 # vision.py
-# نظام الرسم البياني مع إصلاح الذاكرة (Memory Leak Fix)
+# V26: Dynamic Chart Painter 🦅
 # -------------------------------------
-import matplotlib
-matplotlib.use('Agg') # وضع عدم العرض لتوفير الذاكرة
 import matplotlib.pyplot as plt
-import mplfinance as mpf
-import pandas as pd
+import matplotlib.dates as mdates
 import io
-import gc
+import mplfinance as mpf
 
 class ChartPainter:
-    def draw_entry_chart(self, df, entry, sl, tp, title_type="ENTRY"):
-        buf = io.BytesIO()
+    def __init__(self):
+        pass
+
+    def draw_entry_chart(self, df, entry_price, sl, tp, symbol, mode="ENTRY"):
         try:
-            # تنظيف مسبق صارم
-            plt.close('all')
-            
-            # إعداد الألوان
+            # إعداد الألوان والتصميم
             mc = mpf.make_marketcolors(up='#2ebd85', down='#f6465d', edge='inherit', wick='inherit', volume='in')
             s = mpf.make_mpf_style(marketcolors=mc, gridstyle=':', y_on_right=False)
             
-            # تحديد العنوان واللون
-            if title_type == "ENTRY":
-                title = f"SNIPER ENTRY: {entry}"
-                line_color = 'blue'
-            elif title_type == "RADAR":
-                title = f"Target: RADAR @ {entry}"
-                line_color = 'green'
-            else:
-                title = f"MARKET CHECK: {entry}"
-                line_color = 'gray'
-
-            # إضافة خط الدخول
-            addplots = [
-                mpf.make_addplot([entry]*len(df), color=line_color, width=1, linestyle='-'),
-            ]
+            # تحديد الخطوط (الدخول - الهدف - الوقف)
+            hlines = dict(hlines=[entry_price, tp, sl], 
+                          colors=['blue', 'green', 'red'], 
+                          linewidths=[1.5, 1.5, 1.5], 
+                          alpha=0.8)
             
-            # الرسم
-            mpf.plot(
-                df, type='candle', style=s, title=title,
-                ylabel='Price', volume=False, 
-                savefig=dict(fname=buf, dpi=60, bbox_inches='tight', format='png'), # جودة متوسطة للسرعة
-                addplot=addplots,
-                num_panels=1,
-                closefig=True # إغلاق الشكل فوراً
-            )
+            # عنوان الشارت الديناميكي
+            title = f"{symbol} - {mode} POINT: {entry_price}"
+
+            # إنشاء الصورة في الذاكرة
+            buf = io.BytesIO()
+            mpf.plot(df, type='candle', style=s, 
+                     title=title,
+                     hlines=hlines, 
+                     volume=False, 
+                     savefig=dict(fname=buf, dpi=100, bbox_inches='tight'))
             
             buf.seek(0)
             return buf
-            
         except Exception as e:
             print(f"Vision Error: {e}")
             return None
-        finally:
-            # تنظيف نهائي إجباري
-            plt.close('all')
-            gc.collect()
