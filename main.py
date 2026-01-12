@@ -1,11 +1,10 @@
 # main.py
-# V30: YAHOO DATA FIX (Smart Columns) 🦅
+# V31: FINAL DATA CLEANER (ADX Fix) 🦅
 # -------------------------------------
 import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 import time
-import io
 import requests
 import os
 from datetime import datetime
@@ -66,39 +65,35 @@ class TradingEngine:
                 del self.positions[sym]
         return closed_trades
 
-# دالة جلب البيانات المحسنة (تعالج مشكلة الأعمدة)
+# 🛠️ دالة التنظيف العميق للبيانات
 def get_yahoo_data(symbol):
     try:
-        # تحويل الرمز
+        # تحويل الرمز ليتناسب مع ياهو
         yahoo_symbol = symbol.replace('/', '-').replace('USDT', 'USD')
         
-        # استخدام Ticker object لأنه أكثر استقراراً للرمز الواحد
-        ticker = yf.Ticker(yahoo_symbol)
-        df = ticker.history(period='1d', interval='5m')
+        # تحميل البيانات
+        df = yf.download(yahoo_symbol, period='1d', interval='5m', progress=False, auto_adjust=True)
         
         if df.empty: return None, 0.0
 
-        # إعادة تعيين الإندكس
-        df = df.reset_index()
+        # 1. تفكيك الطبقات (MultiIndex Fix)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
+        # 2. توحيد الأسماء (Force Rename)
+        # ياهو يرسل أحيانا Open وأحيانا open.. نوحدها
+        df.columns = [c.capitalize() for c in df.columns]
         
-        # 🛠️ إصلاح مشكلة الأسماء (The Fix)
-        # توحيد أسماء الأعمدة وحذف التوقيت الزمني الزائد
-        df.columns = [c.lower() for c in df.columns]
-        
-        # خريطة إعادة التسمية
-        rename_map = {
-            'date': 't', 'datetime': 't', 
-            'open': 'o', 'high': 'h', 'low': 'l', 'close': 'c', 'volume': 'v'
-        }
-        df.rename(columns=rename_map, inplace=True)
-        
-        # التأكد من وجود عمود الإغلاق
-        if 'c' not in df.columns: return None, 0.0
+        # التأكد من وجود الأعمدة الأساسية
+        required = ['Open', 'High', 'Low', 'Close', 'Volume']
+        if not all(col in df.columns for col in required):
+            return None, 0.0
 
-        price = df['c'].iloc[-1]
+        price = df['Close'].iloc[-1]
         
-        # حساب المؤشرات
-        df.ta.adx(length=14, append=True)
+        # 3. حساب المؤشر (ADX)
+        # pandas_ta يحتاج أسماء صحيحة (Open, High, Low, Close) وقد جهزناها له
+        df.ta.adx(high='High', low='Low', close='Close', length=14, append=True)
         
         return df, price
     except Exception as e:
@@ -114,12 +109,13 @@ def get_best_market_opportunity():
         try:
             df, price = get_yahoo_data(symbol)
             
-            if df is None or len(df) < 20: 
-                error_msg = "No Data or Low Data"
+            if df is None: 
+                error_msg = "Data Empty"
                 continue
             
+            # التحقق من أن حساب ADX تم بنجاح
             if 'ADX_14' not in df.columns: 
-                error_msg = "ADX Calc Failed"
+                error_msg = "ADX Calc Failed (Missing Cols)"
                 continue
 
             adx = df['ADX_14'].iloc[-1]
@@ -129,7 +125,7 @@ def get_best_market_opportunity():
                 highest_adx = adx
                 best_data = {
                     'symbol': symbol, 'price': price, 'adx': adx, 
-                    'df': df, 'vol': df['v'].iloc[-1] if 'v' in df.columns else 0
+                    'df': df, 'vol': df['Volume'].iloc[-1]
                 }
         except Exception as e:
             error_msg = str(e)
@@ -139,7 +135,7 @@ def get_best_market_opportunity():
 
 def run_bot():
     engine = TradingEngine()
-    bot.show_keyboard("🦅 <b>V30: DATA STREAM FIXED</b>\n- Yahoo Parser: Updated 🛠️\n- Status: READY")
+    bot.show_keyboard("🦅 <b>V31: DATA CLEANER ACTIVE</b>\n- MultiIndex: Flattened 🔨\n- ADX: Optimized 🧠")
     
     last_radar_time = time.time() - 60 
     
@@ -170,13 +166,14 @@ def run_bot():
                     msg = f"📡 <b>Manual Scan</b>\nTop: {data['symbol']}\nADX: {data['adx']:.1f}\nPrice: {data['price']:.2f}"
                     bot.send_admin(msg)
                 else:
-                    # الآن سيظهر الخطأ الحقيقي إذا وجد
-                    bot.send_admin(f"⚠️ Scan Failed: {err if err else 'Wait 5s...'}")
+                    bot.send_admin(f"⚠️ Scan Failed: {err if err else 'Wait...'}")
 
             elif cmd == "chart": 
                 data, _ = get_best_market_opportunity()
                 if data:
-                    img = painter.draw_entry_chart(data['df'], data['price'], data['price']*0.9, data['price']*1.1, data['symbol'], mode="SCAN")
+                    # نستخدم الأعمدة المصححة للرسم
+                    df_chart = data['df'].rename(columns={'Open':'o', 'High':'h', 'Low':'l', 'Close':'c', 'Volume':'v'})
+                    img = painter.draw_entry_chart(df_chart, data['price'], data['price']*0.9, data['price']*1.1, data['symbol'], mode="SCAN")
                     if img:
                         bot.send_photo(img, f"📸 <b>Instant Chart</b>\n{data['symbol']} @ {data['price']:.2f}", bot_type='admin')
                         img.close()
