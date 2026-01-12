@@ -1,14 +1,15 @@
 # main.py
-# V25: Notifications & Persistent Buttons 🦅
+# V26: THE INVINCIBLE BOT (Multi-Pair + ADX Shield) 🦅
 # -------------------------------------
 import ccxt
 import pandas as pd
+import pandas_ta as ta  # تأكد من وجود هذه المكتبة في requirements.txt
 import time
 import requests
 import sys
 import gc
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 import config
 from telegram_bot import TelegramBot
 from ai_brain import QuantModel
@@ -19,92 +20,119 @@ keep_alive()
 
 class MarketFeed:
     def __init__(self):
-        api = os.environ.get('API_KEY', config.API_KEY)
-        sec = os.environ.get('SECRET_KEY', config.SECRET_KEY)
-        self.writer = ccxt.binance({'apiKey': api, 'secret': sec, 'options': {'defaultType': 'future'}})
-        self.reader = ccxt.kucoin() 
+        self.exchange = ccxt.kucoin() # نستخدم KuCoin للبيانات لأنه سريع ومجاني
         
-    def get_price(self):
-        try: 
-            ticker = self.reader.fetch_ticker('SOL/USDT')
-            return float(ticker['last'])
-        except: return 0.0
-
-    def get_candles(self, timeframe, limit=1000):
+    def get_data(self, symbol):
         try:
-            bars = self.reader.fetch_ohlcv('SOL/USDT', timeframe, limit=limit)
-            if not bars: return None
+            # جلب الشموع
+            bars = self.exchange.fetch_ohlcv(symbol, config.TIMEFRAME, limit=100)
             df = pd.DataFrame(bars, columns=['t', 'open', 'high', 'low', 'close', 'volume'])
+            df['t'] = pd.to_datetime(df['t'], unit='ms')
+            
+            # حساب المؤشرات الفنية (ADX + RSI)
+            df.ta.adx(length=14, append=True) # يضيف ADX_14
+            df.ta.rsi(length=14, append=True) # يضيف RSI_14
+            
             return df
         except: return None
 
-    def get_btc_sentiment(self):
+    def get_price(self, symbol):
         try:
-            bars = self.reader.fetch_ohlcv('BTC/USDT', '1h', limit=24)
-            if not bars: return "NEUTRAL"
-            closes = [x[4] for x in bars]
-            return "BULLISH 🟢" if closes[-1] > closes[0] else "BEARISH 🔴"
-        except: return "NEUTRAL ⚪"
+            ticker = self.exchange.fetch_ticker(symbol)
+            return float(ticker['last'])
+        except: return 0.0
 
 class TradingEngine:
     def __init__(self):
         self.balance = config.INITIAL_CAPITAL
-        self.position = None
-        self.pnl_history = []
-    
-    def check_institutional_volume(self, df):
-        try:
-            vol_ma = df['volume'].rolling(window=20).mean().iloc[-1]
-            current_vol = df['volume'].iloc[-1]
-            if current_vol > vol_ma * 1.2: return True, "🔥 High Vol"
-            return False, "❄️ Normal"
-        except: return False, "Unknown"
+        self.positions = {} # قاموس لتخزين الصفقات لكل عملة
+        self.history = []
 
-    def execute_trade(self, signal, price, atr):
-        if self.position: return None
-        sl_dist = atr * 2.0 
-        tp_dist = atr * 4.0
-        if signal == 'LONG':
+    def calculate_position_size(self, confidence):
+        # المحفظة الذكية: تزيد المخاطرة إذا كانت الثقة عالية
+        risk_pct = config.HIGH_RISK if confidence > 0.90 else config.NORMAL_RISK
+        amount = self.balance * risk_pct
+        return amount
+
+    def open_position(self, symbol, type, price, atr, confidence):
+        if symbol in self.positions: return None # لا نفتح صفقتين لنفس العملة
+        
+        sl_dist = atr * 2.0
+        tp_dist = atr * 4.0 # العائد ضعف المخاطرة (2:1)
+        
+        if type == 'LONG':
             sl = price - sl_dist
             tp = price + tp_dist
         else:
             sl = price + sl_dist
             tp = price - tp_dist
-        risk_amt = self.balance * config.RISK_PER_TRADE
-        qty = risk_amt / sl_dist if sl_dist > 0 else 0
-        self.position = {'type': signal, 'entry': price, 'qty': qty, 'sl': sl, 'tp': tp}
-        return self.position
+            
+        qty = self.calculate_position_size(confidence) / price
+        
+        pos = {
+            'symbol': symbol, 'type': type, 'entry': price, 
+            'qty': qty, 'sl': sl, 'tp': tp, 
+            'highest_price': price, # للوقف المتحرك
+            'start_time': datetime.now()
+        }
+        self.positions[symbol] = pos
+        return pos
 
-    def update_position(self, current_price):
-        if not self.position: return 0.0
-        pos = self.position
-        pnl = 0.0
-        closed = False
-        if pos['type'] == 'LONG':
-            if current_price >= pos['tp']:
-                pnl = (pos['tp'] - pos['entry']) * pos['qty']
-                closed = True
-            elif current_price <= pos['sl']:
-                pnl = (pos['sl'] - pos['entry']) * pos['qty']
-                closed = True
-        else:
-            if current_price <= pos['tp']:
-                pnl = (pos['entry'] - pos['tp']) * pos['qty']
-                closed = True
-            elif current_price >= pos['sl']:
-                pnl = (pos['entry'] - pos['sl']) * pos['qty']
-                closed = True
-        if closed:
-            self.balance += pnl
-            self.pnl_history.append(pnl)
-            self.position = None
-            return pnl
-        return 0.0
+    def manage_positions(self, current_prices):
+        # مراقبة جميع الصفقات المفتوحة
+        closed_trades = []
+        active_symbols = list(self.positions.keys())
+        
+        for sym in active_symbols:
+            pos = self.positions[sym]
+            curr = current_prices.get(sym, 0)
+            if curr == 0: continue
+            
+            pnl = 0
+            closed = False
+            reason = ""
+            
+            # 1. تحديث الوقف المتحرك (Trailing Stop) - الدرع النووي
+            if pos['type'] == 'LONG':
+                if curr > pos['highest_price']: pos['highest_price'] = curr
+                # إذا تحرك السعر 1% لصالحنا، نحرك الوقف للدخول
+                if (pos['highest_price'] - pos['entry']) / pos['entry'] > 0.01:
+                    new_sl = pos['entry'] * 1.001 # فوق الدخول بقليل
+                    if new_sl > pos['sl']: pos['sl'] = new_sl
+            
+                # فحص الخروج
+                if curr >= pos['tp']:
+                    pnl = (pos['tp'] - pos['entry']) * pos['qty']
+                    closed = True; reason = "Take Profit ✅"
+                elif curr <= pos['sl']:
+                    pnl = (pos['sl'] - pos['entry']) * pos['qty']
+                    closed = True; reason = "Stop Loss 🛑"
+                    
+            else: # SHORT
+                if curr < pos['highest_price']: pos['highest_price'] = curr
+                if (pos['entry'] - pos['highest_price']) / pos['entry'] > 0.01:
+                    new_sl = pos['entry'] * 0.999
+                    if new_sl < pos['sl']: pos['sl'] = new_sl
+                    
+                if curr <= pos['tp']:
+                    pnl = (pos['entry'] - pos['tp']) * pos['qty']
+                    closed = True; reason = "Take Profit ✅"
+                elif curr >= pos['sl']:
+                    pnl = (pos['entry'] - pos['sl']) * pos['qty']
+                    closed = True; reason = "Stop Loss 🛑"
+            
+            if closed:
+                self.balance += pnl
+                self.history.append(pnl)
+                closed_trades.append((pos, pnl, reason))
+                del self.positions[sym]
+                
+        return closed_trades
 
-def prepare_for_painter(df_in):
-    df_out = df_in.copy()
+def prepare_chart_data(df):
+    df_out = df.copy()
     df_out.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
-    df_out.index = pd.to_datetime(df_out['t'], unit='ms')
+    df_out.index = df_out['t']
     return df_out
 
 def run_bot():
@@ -114,132 +142,91 @@ def run_bot():
     ai = QuantModel()
     painter = ChartPainter()
     
-    bot.show_keyboard("🦅 <b>تم تحديث النظام</b>\n- الأزرار مثبتة.\n- إشعارات الدخول/الخروج مفعلة لبوت التحكم.")
-    print("🦅 V25 Running...")
-    
-    status = "RUNNING"
-    last_radar_time = 0
+    bot.show_keyboard("🦅 <b>V26: INVINCIBLE ONLINE</b>\n- Multi-Pair Active\n- ADX Shield Active\n- Smart Wallet Ready")
+    print("🦅 V26 Scanning Targets...")
     
     while True:
         try:
-            current_time = time.time()
-            price = market.get_price()
+            current_prices = {}
             
-            # استقبال الأوامر
-            cmd = bot.check_updates()
-            if cmd:
-                if "شارت" in cmd and price > 0:
-                    bot.send_admin("📸 جاري جلب الشارت...")
-                    df = market.get_candles(config.TIMEFRAME)
-                    if df is not None:
-                        img = painter.draw_entry_chart(prepare_for_painter(df.tail(80)), price, price, price, "MANUAL")
-                        if img: bot.send_photo(img, f"سعر السوق: {price}", bot_type='admin')
-                        try: img.close(); del img; del df; gc.collect()
-                        except: pass
+            # 1. الدورة على جميع العملات (المسح الراداري)
+            for symbol in config.TARGETS:
+                df = market.get_data(symbol)
+                price = market.get_price(symbol)
+                current_prices[symbol] = price
                 
-                elif "الرصيد" in cmd:
-                    pnl = sum(engine.pnl_history)
-                    bot.send_admin(f"💰 <b>المحفظة:</b>\n💵 الرصيد الحالي: {engine.balance:.2f}$\n📈 الأرباح التراكمية: {pnl:.2f}$")
-
-                elif "تقرير" in cmd:
-                    dz_time = datetime.now() + timedelta(hours=1)
-                    pos_msg = "كاش (خارج السوق)" if engine.position is None else f"مفتوحة ({engine.position['type']})"
-                    bot.send_admin(f"📊 <b>تقرير الحالة:</b>\nوضع البوت: {status}\nالصفقة الحالية: {pos_msg}\nالوقت: {dz_time.strftime('%H:%M')}")
-
-                elif "إيقاف" in cmd: status = "PAUSED"; bot.send_admin("⏸️ تم إيقاف الرادار مؤقتاً")
-                elif "تشغيل" in cmd: status = "RUNNING"; bot.send_admin("▶️ تم تشغيل الرادار")
-
-            # الرادار والصفقات
-            if status == "RUNNING" and price > 0:
-                # 1. مراقبة إغلاق الصفقات
-                if engine.position:
-                    pnl = engine.update_position(price)
-                    if pnl != 0:
-                        # تصميم رسالة الإغلاق الجميلة
-                        if pnl > 0:
-                            header = "✅ <b>هدف (Take Profit)</b>"
-                            amount = f"+{pnl:.2f}$"
-                        else:
-                            header = "🛑 <b>وقف (Stop Loss)</b>"
-                            amount = f"{pnl:.2f}$"
+                if df is None or len(df) < 50: continue
+                
+                # --- الفلتر الدفاعي (ADX) ---
+                adx_val = df['ADX_14'].iloc[-1]
+                if adx_val < config.ADX_THRESHOLD:
+                    # السوق ميت، تجاوز هذه العملة
+                    continue
+                
+                # --- الذكاء الاصطناعي ---
+                pred, conf = ai.predict(df)
+                
+                # شروط الدخول الصارمة
+                if symbol not in engine.positions and conf > config.CONFIDENCE_THRESHOLD * 100:
+                    signal = "LONG" if pred == 1 else "SHORT"
+                    
+                    # حساب الـ ATR لتحديد الأهداف
+                    atr = (df['high'] - df['low']).mean()
+                    
+                    # فتح الصفقة
+                    pos = engine.open_position(symbol, signal, price, atr, conf/100)
+                    
+                    if pos:
+                        # --- 1. رسالة الرادار (احترافية كما طلبت) ---
+                        sentiment = "🐂 BULL" if signal == "LONG" else "🐻 BEAR"
+                        vol_type = "🔥 High Vol" if df['volume'].iloc[-1] > df['volume'].mean() else "🌊 Normal"
+                        trend_str = "🚀 STRONG" if adx_val > 30 else "📈 RISING"
+                        risk_lvl = "🟢 Low Risk" if conf > 90 else "🟡 Medium"
                         
-                        msg_admin = (
-                            f"{header}\n"
-                            f"💵 النتيجة: <b>{amount}</b>\n"
-                            f"💰 الرصيد الجديد: {engine.balance:.2f}$"
+                        radar_msg = (
+                            f"📡 <b>RADAR SCAN</b>\n"
+                            f"💎 <b>Pair:</b> {symbol}\n"
+                            f"💵 <b>Price:</b> {price}\n"
+                            f"🧠 <b>AI:</b> {sentiment} ({conf:.1f}%)\n"
+                            f"🌊 <b>Vol:</b> {vol_type}\n"
+                            f"🌍 <b>Trend:</b> {trend_str} (ADX: {adx_val:.0f})\n"
+                            f"🛡️ <b>Risk:</b> {risk_lvl}\n"
+                            f"🎯 <b>Target:</b> {pos['tp']:.2f}"
                         )
-                        # إرسال لبوت التحكم (لك)
-                        bot.send_admin(msg_admin)
-                        # إرسال لبوت الأخبار (للناس)
-                        bot.send_news(f"{header} Closed: {amount}")
+                        
+                        # رسم الشارت وإرساله
+                        chart_data = prepare_chart_data(df.tail(60))
+                        img = painter.draw_entry_chart(chart_data, price, pos['sl'], pos['tp'], symbol, "ENTRY")
+                        if img:
+                            bot.send_photo(img, radar_msg, bot_type='news')
+                            # إرسال نسخة لبوت التحكم مع السبب
+                            entry_reason = f"Breakout + High ADX ({adx_val:.1f})"
+                            control_msg = f"🚀 <b>New Execution</b>\n{symbol} {signal}\nReason: {entry_reason}"
+                            bot.send_photo(img, control_msg, bot_type='admin')
+                            img.close()
 
-                # 2. البحث عن فرص جديدة
-                if current_time - last_radar_time > 60: 
-                    try:
-                        df_1000 = market.get_candles(config.TIMEFRAME, limit=1000)
-                        if df_1000 is not None:
-                            pred, conf = ai.predict(df_1000)
-                            btc_mood = market.get_btc_sentiment()
-                            is_whale, vol_msg = engine.check_institutional_volume(df_1000)
-                            trend_long = "UP 🟢" if df_1000['close'].iloc[-1] > df_1000['close'].iloc[-20] else "DOWN 🔴"
-                            
-                            if engine.position is None and conf > config.CONFIDENCE_THRESHOLD * 100:
-                                signal = "LONG" if pred == 1 else "SHORT"
-                                entry_valid = False
-                                if signal == "LONG" and "UP" in trend_long and "BEARISH" not in btc_mood: entry_valid = True
-                                if signal == "SHORT" and "DOWN" in trend_long and "BULLISH" not in btc_mood: entry_valid = True
-                                
-                                if entry_valid:
-                                    atr = (df_1000['high'] - df_1000['low']).mean()
-                                    pos = engine.execute_trade(signal, price, atr)
-                                    if pos:
-                                        # رسالة الدخول لبوت التحكم (لك)
-                                        admin_msg = (
-                                            f"🚀 <b>دخول صفقة جديدة!</b>\n"
-                                            f"النوع: {signal}\n"
-                                            f"السعر: {price}\n"
-                                            f"🎯 الهدف: {pos['tp']:.2f}\n"
-                                            f"🛡️ الوقف: {pos['sl']:.2f}"
-                                        )
-                                        bot.send_admin(admin_msg)
-                                        
-                                        # رسالة للعامة (أبسط)
-                                        bot.send_news(f"🐋 <b>ENTRY:</b> {signal} @ {price}\n{vol_msg}")
-                                        
-                                        try:
-                                            # رسم الشارت وإرساله للاثنين
-                                            img = painter.draw_entry_chart(prepare_for_painter(df_1000.tail(60)), price, price, price, "ENTRY")
-                                            if img: 
-                                                bot.send_photo(img, "Sniper Entry", bot_type='news') # للعامة
-                                                bot.send_photo(img, "نقطة الدخول الرسمية", bot_type='admin') # لك
-                                            img.close(); del img
-                                        except: pass
-
-                            # تحديث الرادار الدوري
-                            ai_icon = "🐂 BULL" if pred == 1 else "🐻 BEAR"
-                            msg = (
-                                f"📡 <b>RADAR SCAN</b>\n"
-                                f"💎 Price: {price}\n"
-                                f"🧠 AI: <b>{ai_icon}</b> ({conf:.1f}%)\n"
-                                f"🌊 Vol: {vol_msg}\n"
-                                f"🌍 BTC: {btc_mood}"
-                            )
-                            try:
-                                img_radar = painter.draw_entry_chart(prepare_for_painter(df_1000.tail(60)), price, price, price, "RADAR")
-                                if img_radar: bot.send_photo(img_radar, msg, bot_type='news')
-                                img_radar.close(); del img_radar
-                            except: pass
-                            
-                            last_radar_time = current_time
-                            del df_1000
-                            gc.collect()
-                    except Exception as e:
-                        print(f"Radar Error: {e}")
-                        gc.collect()
-
-            time.sleep(1)
+            # 2. إدارة الصفقات المفتوحة (الربح/الخسارة)
+            closed = engine.manage_positions(current_prices)
+            for pos, pnl, reason in closed:
+                icon = "💰" if pnl > 0 else "🛑"
+                msg = (
+                    f"{icon} <b>Trade Closed: {pos['symbol']}</b>\n"
+                    f"Result: {reason}\n"
+                    f"PnL: {pnl:.2f}$\n"
+                    f"New Balance: {engine.balance:.2f}$"
+                )
+                bot.send_admin(msg)
+            
+            # أوامر المستخدم (تقرير/رصيد)
+            cmd = bot.check_updates()
+            if cmd and "تقرير" in cmd:
+                open_pos_str = "\n".join([f"- {s}: {p['type']}" for s, p in engine.positions.items()]) or "No Active Trades"
+                bot.send_admin(f"📊 <b>System Report</b>\nScanning: {len(config.TARGETS)} Pairs\nActive: {open_pos_str}\nBalance: {engine.balance:.2f}$")
+            
+            time.sleep(10) # راحة 10 ثواني بين كل دورة مسح كاملة
+            
         except Exception as e:
-            print(f"Main Error: {e}")
+            print(f"Error: {e}")
             time.sleep(5)
 
 if __name__ == "__main__":
