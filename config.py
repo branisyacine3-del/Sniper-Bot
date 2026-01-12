@@ -1,5 +1,7 @@
+import os
+
 # config.py
-# V26: Invincible Configuration 🦅
+# V26: Invincible Configuration (Secure Mode) 🦅
 # -------------------------------------
 
 # 1. إعدادات السوق (تعدد الجبهات)
@@ -11,14 +13,19 @@ ADX_THRESHOLD = 25.0       # أي تريند أضعف من 25 ممنوع الد�
 CONFIDENCE_THRESHOLD = 0.80 # الذكاء الاصطناعي يجب أن يكون واثقاً فوق 80%
 
 # 3. المحفظة الذكية (إدارة الأموال)
-INITIAL_CAPITAL = 100.0    # رأس المال
+INITIAL_CAPITAL = 100.0    # رأس المال الافتراضي للحسابات
 NORMAL_RISK = 0.02         # المخاطرة العادية (2%)
 HIGH_RISK = 0.05           # المخاطرة للصفقات الذهبية (5%)
-LEVERAGE = 5               # الرافعة المالية (اختياري للحسابات الحقيقية)
+LEVERAGE = 5               # الرافعة المالية
 
-# 4. مفاتيح النظام (لا تغيرها)
-API_KEY = "YOUR_BINANCE_API_KEY"
-SECRET_KEY = "YOUR_BINANCE_SECRET_KEY"
-CONTROL_BOT_TOKEN = "7549306041:AAH8a... (ضع التوكن الخاص بك)"
-NEWS_BOT_TOKEN = "7734139988:AAH... (ضع التوكن الخاص بك)"
-CHAT_ID = "6350961806"
+# 4. مفاتيح النظام (يتم سحبها تلقائياً من إعدادات Render)
+# تأكد أن الأسماء في Render مطابقة تماماً لما بين الأقواس هنا
+API_KEY = os.getenv("API_KEY")
+SECRET_KEY = os.getenv("SECRET_KEY")
+
+# توكن بوت التحكم وبوت الأخبار
+CONTROL_BOT_TOKEN = os.getenv("CONTROL_BOT_TOKEN")
+NEWS_BOT_TOKEN = os.getenv("NEWS_BOT_TOKEN")
+
+# معرف الشات الخاص بك
+CHAT_ID = os.getenv("CHAT_ID")
