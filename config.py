@@ -24,7 +24,7 @@ API_KEY = os.getenv("API_KEY")
 SECRET_KEY = os.getenv("SECRET_KEY")
 
 # توكن بوت التحكم وبوت الأخبار
-CONTROL_BOT_TOKEN = os.getenv("CONTROL_BOT_TOKEN")
+CONTROL_BOT_TOKEN = os.getenv("BOT_TOKEN")
 NEWS_BOT_TOKEN = os.getenv("NEWS_BOT_TOKEN")
 
 # معرف الشات الخاص بك
