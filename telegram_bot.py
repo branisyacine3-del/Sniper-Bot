@@ -1,7 +1,8 @@
 # telegram_bot.py
-# V27: Responsive Interface 🦅
+# V33: Classic Keyboard Layout 🦅
 import requests
 import time
+import json
 
 class TelegramBot:
     def __init__(self):
@@ -19,7 +20,7 @@ class TelegramBot:
             data = {'chat_id': self.chat_id, 'caption': caption, 'parse_mode': 'HTML'}
             requests.post(url, files=files, data=data)
         except Exception as e:
-            print(f"Send Error: {e}")
+            print(f"Send Photo Error: {e}")
 
     def send_admin(self, text):
         url = f"https://api.telegram.org/bot{self.control_token}/sendMessage"
@@ -32,31 +33,28 @@ class TelegramBot:
         requests.post(url, data=data)
 
     def show_keyboard(self, text):
-        # لوحة التحكم مع الزر السابع الجديد
+        # هنا التغيير: استخدام keyboard بدلاً من inline_keyboard لتثبيت الأزرار بالأسفل
         keyboard = {
-            "inline_keyboard": [
-                [{"text": "💰 الرصيد", "callback_data": "balance"}, {"text": "📡 فحص رادار", "callback_data": "scan"}],
-                [{"text": "📸 شارت فوري", "callback_data": "chart"}, {"text": "📊 تقرير شامل", "callback_data": "report"}],
-                [{"text": "🏆 لوحة الأداء (New)", "callback_data": "dashboard"}], 
-                [{"text": "▶️ تشغيل", "callback_data": "start"}, {"text": "🛑 إيقاف", "callback_data": "stop"}]
-            ]
+            "keyboard": [
+                [{"text": "💰 الرصيد"}, {"text": "📡 فحص رادار"}],
+                [{"text": "📸 شارت فوري"}, {"text": "📊 تقرير شامل"}],
+                [{"text": "🏆 لوحة الأداء"}], 
+                [{"text": "▶️ تشغيل"}, {"text": "🛑 إيقاف"}]
+            ],
+            "resize_keyboard": True,
+            "one_time_keyboard": False
         }
         url = f"https://api.telegram.org/bot{self.control_token}/sendMessage"
-        data = {'chat_id': self.chat_id, 'text': text, 'reply_markup': str(keyboard).replace("'", '"')}
+        data = {'chat_id': self.chat_id, 'text': text, 'reply_markup': json.dumps(keyboard)}
         requests.post(url, data=data)
 
     def get_updates(self):
-        # وظيفة محسنة لجلب الضغطات
         url = f"https://api.telegram.org/bot{self.control_token}/getUpdates?offset={self.offset}&timeout=1"
         try:
             resp = requests.get(url).json()
             if "result" in resp:
                 for item in resp["result"]:
                     self.offset = item["update_id"] + 1
-                    # التحقق من ضغط الزر
-                    if "callback_query" in item:
-                        return item["callback_query"]["data"]
-                    # التحقق من الرسائل النصية
                     if "message" in item and "text" in item["message"]:
                         return item["message"]["text"]
         except:
