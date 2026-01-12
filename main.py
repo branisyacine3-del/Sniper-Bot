@@ -1,7 +1,7 @@
 # main.py
-# V28: DATA STREAM FIXED (Binance Source) 🦅
+# V29: GLOBAL UNRESTRICTED ACCESS (Yahoo Finance) 🦅
 # -------------------------------------
-import ccxt
+import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 import time
@@ -20,9 +20,6 @@ keep_alive()
 # تهيئة الأدوات
 bot = TelegramBot()
 painter = ChartPainter()
-
-# التغيير الجوهري: استخدام Binance لجلب البيانات (أكثر استقراراً)
-market = ccxt.binance({'options': {'adjustForTimeDifference': True}})
 ai = QuantModel()
 
 class TradingEngine:
@@ -69,50 +66,68 @@ class TradingEngine:
                 del self.positions[sym]
         return closed_trades
 
-# دالة جلب البيانات (تم تحسينها لتجاوز الأخطاء)
+# دالة جلب البيانات من Yahoo Finance (تعمل في كل مكان)
+def get_yahoo_data(symbol):
+    try:
+        # تحويل الرمز: Binance يستخدم BTC/USDT لكن Yahoo يستخدم BTC-USD
+        yahoo_symbol = symbol.replace('/', '-').replace('USDT', 'USD')
+        
+        # جلب بيانات يوم واحد بفاصل 5 دقائق
+        df = yf.download(yahoo_symbol, period='1d', interval='5m', progress=False)
+        
+        if df.empty: return None, 0.0
+
+        # تنسيق البيانات
+        df = df.reset_index()
+        # التعامل مع اختلاف أسماء الأعمدة في النسخ الجديدة
+        df.columns = [c.lower() for c in df.columns] 
+        # إعادة التسمية للتوافق مع البوت
+        rename_map = {'date': 't', 'datetime': 't', 'open': 'o', 'high': 'h', 'low': 'l', 'close': 'c', 'volume': 'v'}
+        # البحث عن الأعمدة الصحيحة (أحيانا تكون ('Close', 'BTC-USD'))
+        if isinstance(df.columns[0], tuple):
+             df.columns = [c[0].lower() for c in df.columns]
+        
+        df.rename(columns=rename_map, inplace=True)
+        
+        if 'c' not in df.columns: return None, 0.0
+
+        price = df['c'].iloc[-1]
+        
+        # حساب المؤشرات
+        df.ta.adx(length=14, append=True)
+        
+        return df, price
+    except Exception as e:
+        print(f"Yahoo Error ({symbol}): {e}")
+        return None, 0.0
+
 def get_best_market_opportunity():
     best_data = None
     highest_adx = -1
     error_msg = ""
     
     for symbol in config.TARGETS:
-        try:
-            # جلب الشموع من بينانس
-            bars = market.fetch_ohlcv(symbol, config.TIMEFRAME, limit=60)
-            if not bars: continue
-            
-            df = pd.DataFrame(bars, columns=['t', 'o', 'h', 'l', 'c', 'v'])
-            
-            # التأكد من وجود بيانات كافية للمؤشرات
-            if len(df) < 20: continue
+        df, price = get_yahoo_data(symbol)
+        
+        if df is None or len(df) < 20: continue
+        if 'ADX_14' not in df.columns: continue
 
-            df.ta.adx(length=14, append=True)
-            
-            # التعامل مع احتمال نقص البيانات
-            if 'ADX_14' not in df.columns: continue
-            
-            adx = df['ADX_14'].iloc[-1]
-            price = df['c'].iloc[-1]
-            
-            # تجاهل القيم غير الموجودة (NaN)
-            if pd.isna(adx): continue
+        adx = df['ADX_14'].iloc[-1]
+        
+        if pd.isna(adx): continue
 
-            if adx > highest_adx:
-                highest_adx = adx
-                best_data = {
-                    'symbol': symbol, 'price': price, 'adx': adx, 
-                    'df': df, 'vol': df['v'].iloc[-1]
-                }
-        except Exception as e:
-            error_msg = str(e)
-            print(f"Error fetching {symbol}: {e}")
-            continue
+        if adx > highest_adx:
+            highest_adx = adx
+            best_data = {
+                'symbol': symbol, 'price': price, 'adx': adx, 
+                'df': df, 'vol': df['v'].iloc[-1] if 'v' in df.columns else 0
+            }
             
     return best_data, error_msg
 
 def run_bot():
     engine = TradingEngine()
-    bot.show_keyboard("🦅 <b>V28: CONNECTED TO BINANCE</b>\n- Data Stream: Stable 🟢\n- Auto Radar: Active")
+    bot.show_keyboard("🦅 <b>V29: UNLOCKED (Yahoo Data)</b>\n- Data: Global Source 🌍\n- Status: ONLINE ✅")
     
     last_radar_time = time.time() - 60 
     
@@ -140,18 +155,17 @@ def run_bot():
             elif cmd == "scan": 
                 data, err = get_best_market_opportunity()
                 if data:
-                    msg = f"📡 <b>Manual Scan</b>\nTop: {data['symbol']}\nADX: {data['adx']:.1f}\nPrice: {data['price']}"
+                    msg = f"📡 <b>Manual Scan</b>\nTop: {data['symbol']}\nADX: {data['adx']:.1f}\nPrice: {data['price']:.2f}"
                     bot.send_admin(msg)
                 else:
-                    # الآن سيخبرك بالسبب الحقيقي للخطأ
-                    bot.send_admin(f"⚠️ Data Error: {err if err else 'No strong targets'}")
+                    bot.send_admin("⚠️ Data Loading... Try again in 5s")
 
             elif cmd == "chart": 
                 data, _ = get_best_market_opportunity()
                 if data:
                     img = painter.draw_entry_chart(data['df'], data['price'], data['price']*0.9, data['price']*1.1, data['symbol'], mode="SCAN")
                     if img:
-                        bot.send_photo(img, f"📸 <b>Instant Chart</b>\n{data['symbol']} @ {data['price']}", bot_type='admin')
+                        bot.send_photo(img, f"📸 <b>Instant Chart</b>\n{data['symbol']} @ {data['price']:.2f}", bot_type='admin')
                         img.close()
 
             # 2. الرادار التلقائي
@@ -162,7 +176,7 @@ def run_bot():
                     msg = (
                         f"📡 <b>RADAR PULSE (1m)</b>\n"
                         f"💎 Pair: <b>{data['symbol']}</b>\n"
-                        f"💵 Price: {data['price']}\n"
+                        f"💵 Price: {data['price']:.2f}\n"
                         f"📈 Trend Strength: {data['adx']:.1f} {trend_icon}\n"
                         f"🌊 Vol: {'High' if data['vol'] > 1000 else 'Normal'}"
                     )
@@ -171,15 +185,12 @@ def run_bot():
 
             # 3. إدارة التداول
             current_prices = {}
-            # هنا نستخدم دورة سريعة لجلب الأسعار الحالية فقط
             for symbol in config.TARGETS:
-                try:
-                    ticker = market.fetch_ticker(symbol)
-                    current_prices[symbol] = ticker['last']
-                except: continue
+                _, price = get_yahoo_data(symbol)
+                if price > 0: current_prices[symbol] = price
 
             engine.manage_positions(current_prices)
-            time.sleep(1) 
+            time.sleep(2) 
 
         except Exception as e:
             print(f"Loop Error: {e}")
