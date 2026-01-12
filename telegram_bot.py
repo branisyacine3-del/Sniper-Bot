@@ -1,92 +1,64 @@
 # telegram_bot.py
-# نسخة تثبيت الأزرار (Persistent Keyboard)
-# -------------------------------------
+# V27: Responsive Interface 🦅
 import requests
-import json
-import config
+import time
 
 class TelegramBot:
     def __init__(self):
-        # إعداد بوت التحكم
+        import config
         self.control_token = config.CONTROL_BOT_TOKEN
-        self.control_url = f"https://api.telegram.org/bot{self.control_token}/"
-        
-        # إعداد بوت الرادار
         self.news_token = config.NEWS_BOT_TOKEN
-        self.news_url = f"https://api.telegram.org/bot{self.news_token}/"
-        
         self.chat_id = config.CHAT_ID
         self.offset = 0
 
-        # تصميم لوحة المفاتيح الثابتة
-        self.keyboard = json.dumps({
-            "keyboard": [
-                ["💰 الرصيد", "📡 فحص رادار"],
-                ["📸 شارت فوري", "📊 تقرير شامل"],
-                ["▶️ تشغيل", "🛑 إيقاف"]
-            ],
-            "resize_keyboard": True,
-            "is_persistent": True, # يجبر الأزرار على البقاء
-            "one_time_keyboard": False
-        })
-
-    # إرسال رسالة لبوت التحكم (مع الأزرار دائماً)
-    def send_admin(self, message):
+    def send_photo(self, photo_file, caption, bot_type='admin'):
+        token = self.news_token if bot_type == 'news' else self.control_token
+        url = f"https://api.telegram.org/bot{token}/sendPhoto"
         try:
-            url = self.control_url + "sendMessage"
-            data = {
-                "chat_id": self.chat_id, 
-                "text": message, 
-                "parse_mode": "HTML",
-                "reply_markup": self.keyboard # إرفاق الأزرار مع كل رسالة
-            }
-            requests.post(url, data=data, timeout=5)
-        except: pass
-
-    # إرسال لبوت الرادار (بدون أزرار)
-    def send_news(self, message):
-        try:
-            url = self.news_url + "sendMessage"
-            data = {"chat_id": self.chat_id, "text": message, "parse_mode": "HTML"}
-            requests.post(url, data=data, timeout=5)
-        except: pass
-
-    # إرسال صورة
-    def send_photo(self, photo_buf, caption="", bot_type='news'):
-        try:
-            if bot_type == 'news':
-                url = self.news_url + "sendPhoto"
-                data = {"chat_id": self.chat_id, "caption": caption, "parse_mode": "HTML"}
-            else:
-                # لبوت التحكم نرسل الأزرار مع الصورة أيضاً
-                url = self.control_url + "sendPhoto"
-                data = {
-                    "chat_id": self.chat_id, 
-                    "caption": caption, 
-                    "parse_mode": "HTML",
-                    "reply_markup": self.keyboard
-                }
-                
-            photo_buf.seek(0)
-            files = {'photo': photo_buf}
-            requests.post(url, data=data, files=files, timeout=10)
+            files = {'photo': photo_file}
+            data = {'chat_id': self.chat_id, 'caption': caption, 'parse_mode': 'HTML'}
+            requests.post(url, files=files, data=data)
         except Exception as e:
-            print(f"Photo Error: {e}")
+            print(f"Send Error: {e}")
 
-    def check_updates(self):
+    def send_admin(self, text):
+        url = f"https://api.telegram.org/bot{self.control_token}/sendMessage"
+        data = {'chat_id': self.chat_id, 'text': text, 'parse_mode': 'HTML'}
+        requests.post(url, data=data)
+        
+    def send_news(self, text):
+        url = f"https://api.telegram.org/bot{self.news_token}/sendMessage"
+        data = {'chat_id': self.chat_id, 'text': text, 'parse_mode': 'HTML'}
+        requests.post(url, data=data)
+
+    def show_keyboard(self, text):
+        # لوحة التحكم مع الزر السابع الجديد
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "💰 الرصيد", "callback_data": "balance"}, {"text": "📡 فحص رادار", "callback_data": "scan"}],
+                [{"text": "📸 شارت فوري", "callback_data": "chart"}, {"text": "📊 تقرير شامل", "callback_data": "report"}],
+                [{"text": "🏆 لوحة الأداء (New)", "callback_data": "dashboard"}], 
+                [{"text": "▶️ تشغيل", "callback_data": "start"}, {"text": "🛑 إيقاف", "callback_data": "stop"}]
+            ]
+        }
+        url = f"https://api.telegram.org/bot{self.control_token}/sendMessage"
+        data = {'chat_id': self.chat_id, 'text': text, 'reply_markup': str(keyboard).replace("'", '"')}
+        requests.post(url, data=data)
+
+    def get_updates(self):
+        # وظيفة محسنة لجلب الضغطات
+        url = f"https://api.telegram.org/bot{self.control_token}/getUpdates?offset={self.offset}&timeout=1"
         try:
-            url = self.control_url + "getUpdates"
-            params = {"offset": self.offset, "timeout": 1}
-            resp = requests.get(url, params=params, timeout=3)
-            data = resp.json()
-            
-            if "result" in data and len(data["result"]) > 0:
-                last_update = data["result"][-1]
-                self.offset = last_update["update_id"] + 1
-                if "message" in last_update and "text" in last_update["message"]:
-                    return last_update["message"]["text"]
-            return None
-        except: return None
-    
-    def show_keyboard(self, msg):
-        self.send_admin(msg)
+            resp = requests.get(url).json()
+            if "result" in resp:
+                for item in resp["result"]:
+                    self.offset = item["update_id"] + 1
+                    # التحقق من ضغط الزر
+                    if "callback_query" in item:
+                        return item["callback_query"]["data"]
+                    # التحقق من الرسائل النصية
+                    if "message" in item and "text" in item["message"]:
+                        return item["message"]["text"]
+        except:
+            pass
+        return None
