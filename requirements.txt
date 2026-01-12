@@ -5,3 +5,4 @@ flask
 mplfinance
 matplotlib
 numpy
+pandas_ta
