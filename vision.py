@@ -1,10 +1,9 @@
 # vision.py
-# V27: Visual Command Center 🦅
-# -------------------------------------
+# V33: Robust Chart Engine (Yahoo Compatible) 🦅
 import matplotlib.pyplot as plt
 import io
 import mplfinance as mpf
-import numpy as np
+import pandas as pd
 
 class ChartPainter:
     def __init__(self):
@@ -12,6 +11,20 @@ class ChartPainter:
 
     def draw_entry_chart(self, df, entry_price, sl, tp, symbol, mode="ENTRY"):
         try:
+            # 1. تجهيز البيانات للرسم (إصلاح مشكلة ياهو)
+            df_plot = df.copy()
+            
+            # توحيد أسماء الأعمدة (mplfinance يحتاج حروف كبيرة)
+            df_plot.columns = [c.capitalize() for c in df_plot.columns]
+            
+            # إزالة التوقيت الزمني المعقد (Timezone Removal)
+            if df_plot.index.tz is not None:
+                df_plot.index = df_plot.index.tz_localize(None)
+            
+            # التأكد من اسم الإندكس
+            df_plot.index.name = 'Date'
+
+            # 2. التصميم
             mc = mpf.make_marketcolors(up='#2ebd85', down='#f6465d', edge='inherit', wick='inherit', volume='in')
             s = mpf.make_mpf_style(marketcolors=mc, gridstyle=':', y_on_right=False)
             
@@ -19,43 +32,36 @@ class ChartPainter:
                           colors=['blue', 'green', 'red'], 
                           linewidths=[1.5, 1.5, 1.5], alpha=0.8)
             
-            title = f"{symbol} - {mode} POINT: {entry_price}"
+            title = f"{symbol} - {mode} POINT: {entry_price:.4f}"
+            
             buf = io.BytesIO()
-            mpf.plot(df, type='candle', style=s, title=title,
+            mpf.plot(df_plot, type='candle', style=s, title=title,
                      hlines=hlines, volume=False, 
                      savefig=dict(fname=buf, dpi=100, bbox_inches='tight'))
+            
             buf.seek(0)
             return buf
         except Exception as e:
-            print(f"Chart Error: {e}")
+            print(f"Vision Error: {e}")
             return None
 
     def draw_performance_dashboard(self, win_rate, total_trades, pnl):
-        # دالة رسم عداد الأداء الاحترافي
         try:
             fig, ax = plt.subplots(figsize=(6, 3))
             ax.set_facecolor('black')
             fig.patch.set_facecolor('black')
             
-            # رسم شريط نسبة الفوز
             color = '#2ebd85' if win_rate >= 50 else '#f6465d'
             ax.barh([0], [win_rate], color=color, height=0.5)
-            ax.barh([0], [100], color='#333333', height=0.5, zorder=0) # الخلفية
+            ax.barh([0], [100], color='#333333', height=0.5, zorder=0)
             
-            # النصوص
             ax.text(50, 0, f"{win_rate:.1f}% Win Rate", color='white', ha='center', va='center', fontsize=15, fontweight='bold')
-            
-            # حالة البوت (On Fire / Normal)
             status = "🔥 ON FIRE!" if win_rate > 70 else "🤖 ACTIVE"
             ax.text(50, 0.4, status, color='yellow', ha='center', fontsize=12, fontweight='bold')
-
-            # تفاصيل الأرقام
             info_text = f"Trades: {total_trades} | PnL: {pnl:.2f}$"
             ax.text(50, -0.4, info_text, color='white', ha='center', fontsize=10)
 
-            ax.set_xlim(0, 100)
-            ax.set_ylim(-1, 1)
-            ax.axis('off')
+            ax.set_xlim(0, 100); ax.set_ylim(-1, 1); ax.axis('off')
             
             buf = io.BytesIO()
             plt.savefig(buf, format='png', facecolor='black')
