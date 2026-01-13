@@ -1,9 +1,12 @@
 # vision.py
-# V33: Robust Chart Engine (Yahoo Compatible) 🦅
+# V34: MEMORY OPTIMIZED PAINTER 🦅
+import matplotlib
+matplotlib.use('Agg') # مهم جداً للسيرفرات لتقليل الاستهلاك
 import matplotlib.pyplot as plt
 import io
 import mplfinance as mpf
 import pandas as pd
+import gc
 
 class ChartPainter:
     def __init__(self):
@@ -11,20 +14,18 @@ class ChartPainter:
 
     def draw_entry_chart(self, df, entry_price, sl, tp, symbol, mode="ENTRY"):
         try:
-            # 1. تجهيز البيانات للرسم (إصلاح مشكلة ياهو)
+            # تنظيف استباقي
+            plt.close('all')
+            gc.collect()
+
+            # تجهيز البيانات
             df_plot = df.copy()
-            
-            # توحيد أسماء الأعمدة (mplfinance يحتاج حروف كبيرة)
             df_plot.columns = [c.capitalize() for c in df_plot.columns]
-            
-            # إزالة التوقيت الزمني المعقد (Timezone Removal)
             if df_plot.index.tz is not None:
                 df_plot.index = df_plot.index.tz_localize(None)
-            
-            # التأكد من اسم الإندكس
             df_plot.index.name = 'Date'
 
-            # 2. التصميم
+            # الإعدادات
             mc = mpf.make_marketcolors(up='#2ebd85', down='#f6465d', edge='inherit', wick='inherit', volume='in')
             s = mpf.make_mpf_style(marketcolors=mc, gridstyle=':', y_on_right=False)
             
@@ -32,21 +33,33 @@ class ChartPainter:
                           colors=['blue', 'green', 'red'], 
                           linewidths=[1.5, 1.5, 1.5], alpha=0.8)
             
-            title = f"{symbol} - {mode} POINT: {entry_price:.4f}"
+            title = f"{symbol} - {mode}: {entry_price:.4f}"
             
             buf = io.BytesIO()
-            mpf.plot(df_plot, type='candle', style=s, title=title,
+            # الرسم مع إغلاق الفوري
+            fig, axlist = mpf.plot(df_plot, type='candle', style=s, title=title,
                      hlines=hlines, volume=False, 
-                     savefig=dict(fname=buf, dpi=100, bbox_inches='tight'))
+                     savefig=dict(fname=buf, dpi=80, bbox_inches='tight'), returnfig=True) # خفضنا الدقة لـ 80 لتوفير الذاكرة
             
+            # 🧹 تنظيف الذاكرة اليدوي (مهم جداً)
+            for ax in axlist:
+                ax.clear()
+            fig.clear()
+            plt.close(fig)
+            plt.close('all')
+            del df_plot
+            gc.collect()
+
             buf.seek(0)
             return buf
         except Exception as e:
             print(f"Vision Error: {e}")
+            plt.close('all')
             return None
 
     def draw_performance_dashboard(self, win_rate, total_trades, pnl):
         try:
+            plt.close('all')
             fig, ax = plt.subplots(figsize=(6, 3))
             ax.set_facecolor('black')
             fig.patch.set_facecolor('black')
@@ -64,10 +77,16 @@ class ChartPainter:
             ax.set_xlim(0, 100); ax.set_ylim(-1, 1); ax.axis('off')
             
             buf = io.BytesIO()
-            plt.savefig(buf, format='png', facecolor='black')
+            plt.savefig(buf, format='png', facecolor='black', dpi=80)
+            
+            # تنظيف
+            plt.close(fig)
+            plt.close('all')
+            gc.collect()
+
             buf.seek(0)
             plt.close()
             return buf
         except Exception as e:
-            print(f"Dashboard Error: {e}")
+            plt.close('all')
             return None
