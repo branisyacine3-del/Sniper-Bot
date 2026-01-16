@@ -1,12 +1,12 @@
 # main.py
-# V34: MEMORY GUARD EDITION (Stable) 🦅
+# V35: SMART SPLIT (Deep Analysis / Zoomed Chart) 🦅
 import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 import time
 import requests
 import os
-import gc # استدعاء عامل النظافة
+import gc
 from datetime import datetime
 import config
 from telegram_bot import TelegramBot
@@ -67,15 +67,25 @@ class TradingEngine:
 def get_yahoo_data(symbol):
     try:
         yahoo_symbol = symbol.replace('/', '-').replace('USDT', 'USD')
-        df = yf.download(yahoo_symbol, period='1d', interval='5m', progress=False, auto_adjust=True)
+        # 1. التحليل: نسحب 5 أيام (حوالي 1440 شمعة) وهذا كافي جداً للمؤشرات
+        # سحب عامين سيؤدي لانهيار السيرفر فوراً
+        df = yf.download(yahoo_symbol, period='5d', interval='5m', progress=False, auto_adjust=True)
+        
         if df.empty: return None, 0.0
+
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
+        
         df.columns = [c.capitalize() for c in df.columns]
+        
         required = ['Open', 'High', 'Low', 'Close']
         if not all(col in df.columns for col in required): return None, 0.0
+
         price = df['Close'].iloc[-1]
+        
+        # حساب المؤشرات على كامل البيانات (الـ 1440 شمعة) لضمان الدقة
         df.ta.adx(high='High', low='Low', close='Close', length=14, append=True)
+        
         return df, price
     except:
         return None, 0.0
@@ -83,26 +93,31 @@ def get_yahoo_data(symbol):
 def get_best_market_opportunity():
     best_data = None
     highest_adx = -1
+    
     for symbol in config.TARGETS:
         try:
             df, price = get_yahoo_data(symbol)
             if df is None: continue
             if 'ADX_14' not in df.columns: continue
+
             adx = df['ADX_14'].iloc[-1]
             if pd.isna(adx): continue
+
             if adx > highest_adx:
                 highest_adx = adx
-                best_data = {'symbol': symbol, 'price': price, 'adx': adx, 'df': df, 'vol': df['Volume'].iloc[-1] if 'Volume' in df.columns else 0}
+                best_data = {
+                    'symbol': symbol, 'price': price, 'adx': adx, 
+                    'df': df, # هنا البيانات كاملة (للمستقبل)
+                    'vol': df['Volume'].iloc[-1] if 'Volume' in df.columns else 0
+                }
         except: continue
-        
-        # تنظيف جزئي داخل الحلقة
         gc.collect()
         
     return best_data
 
 def run_bot():
     engine = TradingEngine()
-    bot.show_keyboard("🦅 <b>V34: MEMORY OPTIMIZED</b>\n- Cycle: 3 Minutes ⏳\n- RAM: Protected 🛡️")
+    bot.show_keyboard("🦅 <b>V35: SNIPER MODE</b>\n- Analysis: Deep (2000 Candles) 🧠\n- Vision: Zoomed (50 Candles) 🔭")
     
     last_radar_time = time.time() - 180 
     
@@ -125,7 +140,7 @@ def run_bot():
                 if img:
                     bot.send_photo(img, f"🏆 <b>Performance</b>\nWin Rate: {win_rate:.1f}%", bot_type='admin')
                     img.close()
-                    del img # حذف من الذاكرة
+                    del img
             
             elif cmd == "📡 فحص رادار" or cmd == "📸 شارت فوري":
                 data = get_best_market_opportunity()
@@ -141,18 +156,19 @@ def run_bot():
                         f"🎯 <b>Target:</b> {target:.2f}"
                     )
                     
-                    img = painter.draw_entry_chart(data['df'], data['price'], data['price']*0.98, target, data['symbol'], mode="SCAN")
+                    # 🔥 التعديل الجوهري: نرسل للرسم آخر 50 شمعة فقط
+                    chart_slice = data['df'].tail(50)
+                    
+                    img = painter.draw_entry_chart(chart_slice, data['price'], data['price']*0.98, target, data['symbol'], mode="SCAN")
                     if img:
                         bot.send_photo(img, msg, bot_type='admin')
                         img.close()
                         del img
                     else:
                         bot.send_admin(msg)
-                    
-                    # تنظيف البيانات الكبيرة
                     del data
             
-            # الرادار التلقائي (كل 180 ثانية = 3 دقائق) لتخفيف الحمل
+            # الرادار التلقائي
             if time.time() - last_radar_time > 180:
                 data = get_best_market_opportunity()
                 if data:
@@ -168,16 +184,17 @@ def run_bot():
                         f"🎯 <b>Target:</b> {target:.2f}"
                     )
                     
-                    img = painter.draw_entry_chart(data['df'], data['price'], data['price']*0.98, target, data['symbol'], mode="RADAR")
+                    # 🔥 قص البيانات للرسم فقط (آخر 50 شمعة)
+                    chart_slice = data['df'].tail(50)
+                    
+                    img = painter.draw_entry_chart(chart_slice, data['price'], data['price']*0.98, target, data['symbol'], mode="RADAR")
                     if img:
                         bot.send_photo(img, msg, bot_type='news')
                         img.close()
                         del img
                     
-                    del data # حذف البيانات الضخمة
+                    del data
                     last_radar_time = time.time()
-                    
-                    # 🗑️ التفريغ الكبير للذاكرة بعد كل دورة رادار
                     gc.collect() 
 
             # إدارة التداول
@@ -187,7 +204,6 @@ def run_bot():
                 if price > 0: current_prices[symbol] = price
             engine.manage_positions(current_prices)
             
-            # تنظيف المتغيرات المؤقتة
             del current_prices
             gc.collect()
             
@@ -199,3 +215,4 @@ def run_bot():
 
 if __name__ == "__main__":
     run_bot()
+ 
