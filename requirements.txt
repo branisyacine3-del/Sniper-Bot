@@ -1,9 +1,9 @@
 ccxt
 pandas
+pandas_ta
 requests
 flask
 mplfinance
 matplotlib
 numpy
-pandas_ta
-yfinance
+schedule
