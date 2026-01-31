@@ -1,9 +1,4 @@
 ccxt
-pandas==1.5.3
-numpy==1.23.5
-pandas-ta
+pandas
 requests
-flask
-mplfinance
-matplotlib
 schedule
