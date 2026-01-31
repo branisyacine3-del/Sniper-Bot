@@ -1,9 +1,9 @@
 ccxt
-pandas
-pandas_ta
+pandas<2.0.0
+pandas-ta
 requests
 flask
 mplfinance
 matplotlib
-numpy
+numpy<2.0.0
 schedule
