@@ -1,0 +1,31 @@
+name: Halal Spot Pilot 🦅
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'  # تشغيل كل 15 دقيقة تلقائياً
+  workflow_dispatch:      # زر تشغيل يدوي للتجربة الفورية
+
+jobs:
+  trade:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code (سحب الملفات)
+        uses: actions/checkout@v3
+
+      - name: Setup Python (تجهيز بايثون)
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Libraries (تنصيب المكتبات)
+        run: pip install -r requirements.txt
+
+      - name: Run Bot (تشغيل القناص)
+        env: 
+          # ربط المفاتيح من الخزنة السرية
+          API_KEY: ${{ secrets.API_KEY }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          CONTROL_BOT_TOKEN: ${{ secrets.BOT_TOKEN }} 
+          NEWS_BOT_TOKEN: ${{ secrets.BOT_TOKEN }} 
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: python main.py
