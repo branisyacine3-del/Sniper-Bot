@@ -15,7 +15,7 @@ jobs:
       - name: Setup Python (تجهيز بايثون)
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: '3.9'
 
       - name: Install Libraries (تنصيب المكتبات)
         run: pip install -r requirements.txt
