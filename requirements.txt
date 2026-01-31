@@ -1,9 +1,9 @@
 ccxt
-pandas<2.0.0
-pandas-ta
+pandas
+numpy<2.0.0
+git+https://github.com/twopirllc/pandas-ta.git@development
 requests
 flask
 mplfinance
 matplotlib
-numpy<2.0.0
 schedule
