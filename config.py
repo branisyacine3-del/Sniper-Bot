@@ -20,8 +20,8 @@ LEVERAGE = 5               # الرافعة المالية
 
 # 4. مفاتيح النظام (يتم سحبها تلقائياً من إعدادات Render)
 # تأكد أن الأسماء في Render مطابقة تماماً لما بين الأقواس هنا
-API_KEY = os.getenv("API_KEY")
-SECRET_KEY = os.getenv("SECRET_KEY")
+API_KEY = "ZoaVcxC2owmMJY1x1BLRrV9zxhxlgPpnw94QY2vVCOpCRhnwjEM2G1f8LBvVJ6rP"
+SECRET_KEY = "h0nxkM47tJ7hDBVsoZTVihdguVcybKkpszP1YKTuLf8nzmwjy7Pp9JZkSmIshjaL"
 
 # توكن بوت التحكم وبوت الأخبار
 CONTROL_BOT_TOKEN = os.getenv("8240825398:AAHK88iipy_ivrw7BsHRTTyBG0VtmwDl5D8")
