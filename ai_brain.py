@@ -1,45 +1,47 @@
 # ai_brain.py
-# عقل إسلامي: يقتنص فرص الشراء من القاع فقط 🦅📈
+# العقل الإسلامي: معادلات يدوية (بدون مكتبات خارجية) 🦅📈
 # -------------------------------------
-import pandas_ta as ta
+import pandas as pd
 
 class QuantModel:
     def __init__(self):
         pass
 
+    def calculate_rsi(self, series, period=14):
+        # معادلة RSI الرياضية يدوياً
+        delta = series.diff()
+        gain = (delta.where(delta > 0, 0)).ewm(alpha=1/period, adjust=False).mean()
+        loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/period, adjust=False).mean()
+        rs = gain / loss
+        return 100 - (100 / (1 + rs))
+
     def analyze_market(self, df):
         try:
-            # 1. حساب المؤشرات
-            df['rsi'] = ta.rsi(df['close'], length=14)
-            df['adx'] = ta.adx(df['high'], df['low'], df['close'], length=14)['ADX_14']
+            # 1. حساب RSI يدوياً
+            df['rsi'] = self.calculate_rsi(df['close'], period=14)
             
-            # البولنجر باند (لقنص القيعان)
-            bb = ta.bbands(df['close'], length=20, std=2)
-            df['lower_band'] = bb['BBL_20_2.0']
-            df['upper_band'] = bb['BBU_20_2.0']
+            # 2. حساب مؤشر بسيط للبولنجر باند يدوياً
+            sma = df['close'].rolling(window=20).mean()
+            std = df['close'].rolling(window=20).std()
+            df['lower_band'] = sma - (2 * std)
+            df['upper_band'] = sma + (2 * std)
 
             last = df.iloc[-1]
-            prev = df.iloc[-2]
 
             score = 0
             signal = "NEUTRAL"
 
             # 🟢 استراتيجية الشراء (Spot Buy):
-            # 1. السعر نزل تحت خط البولنجر السفلي (سعر رخيص جداً)
-            # 2. RSI تحت 30 (تشبع بيعي)
+            # السعر رخيص (تحت البولنجر) + RSI منخفض
             if last['close'] < last['lower_band'] or last['rsi'] < 30:
                 score += 2
             
-            # تأكيد قوة التريند الصاعد (ADX)
-            if last['adx'] > 25:
-                score += 1
-
             # 🔴 استراتيجية البيع (Spot Sell):
-            # نبيع فقط لجني الربح عندما يتضخم السعر
+            # السعر غالٍ (فوق البولنجر) + RSI مرتفع
             if last['rsi'] > 70 or last['close'] > last['upper_band']:
                 score -= 2
 
-            # القرار النهائي
+            # القرار
             if score >= 2:
                 signal = "BUY"
             elif score <= -2:
