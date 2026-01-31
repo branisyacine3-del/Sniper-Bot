@@ -1,210 +1,143 @@
 # main.py
-# V38: ARTIFICIAL INTELLIGENCE TRADING (Dynamic Trailing Stop) 🦅
+# V40: HALAL SPOT TRADER (Real Market Data) 🦅
 # -------------------------------------------------------------
-import yfinance as yf
+import ccxt
 import pandas as pd
-import pandas_ta as ta
 import time
-import requests
-import os
-import gc
+import schedule
 from datetime import datetime
 import config
 from telegram_bot import TelegramBot
+from ai_brain import QuantModel
 from vision import ChartPainter
 
-# محاولة لإبقاء الاتصال حياً
+# تشغيل السيرفر للبقاء حياً
 try:
     from keep_alive import keep_alive
     keep_alive()
 except: pass
 
+# تهيئة الأدوات
 bot = TelegramBot()
+brain = QuantModel()
 painter = ChartPainter()
 
-class TradingEngine:
+# الاتصال بالمنصة (بايننس كمثال للبيانات)
+exchange = ccxt.binance({
+    'apiKey': config.API_KEY,
+    'secret': config.SECRET_KEY,
+    'enableRateLimit': True,
+    'options': {'defaultType': 'spot'} # 👈 تأكيد هام: سبوت فقط
+})
+
+class HalalEngine:
     def __init__(self):
-        self.balance = config.INITIAL_CAPITAL
-        self.positions = {}
-        self.history = [] 
-        self.total_wins = 0
-        self.total_losses = 0
+        self.usdt_balance = config.INITIAL_CAPITAL
+        self.portfolio = {} # هنا نخزن العملات التي اشتريناها (Coin: Amount)
+        self.history = []
 
-    def open_position(self, symbol, type, price, atr):
-        if symbol in self.positions: return None
-        
-        # 🧠 الذكاء الاصطناعي هنا: تحديد المجال الحيوي بناء على تذبذب السوق
-        # نستخدم ATR لتحديد مساحة التنفس للصفقة
-        stop_distance = atr * 2.0  # مساحة كافية لعدم الخروج المبكر
-        
-        if type == 'LONG': 
-            sl = price - stop_distance
-            # ⚠️ لاحظ: لا يوجد هدف ثابت (TP = None). السماء هي الحدود!
-            tp = None 
-        
-        # حساب الكمية بناء على المخاطرة
-        qty = (self.balance * config.NORMAL_RISK) / price
-        
-        pos = {
-            'symbol': symbol, 
-            'type': type, 
-            'entry': price, 
-            'qty': qty, 
-            'sl': sl,     # الوقف المبدئي
-            'tp': None,   # مفتوح
-            'highest_price': price, # لتتبع القمة
-            'atr': atr,   # نحتفظ بقيمة التذبذب لاستخدامها في التحريك
-            'start_time': datetime.now()
-        }
-        self.positions[symbol] = pos
-        return pos
+    def fetch_data(self, symbol):
+        try:
+            bars = exchange.fetch_ohlcv(symbol, timeframe=config.TIMEFRAME, limit=100)
+            df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            return df
+        except Exception as e:
+            print(f"Data Error {symbol}: {e}")
+            return None
 
-    def manage_positions(self, current_prices, current_rsi):
-        closed_trades = []
-        active = list(self.positions.keys())
-        
-        for sym in active:
-            pos = self.positions[sym]
-            curr_price = current_prices.get(sym, 0)
-            rsi = current_rsi.get(sym, 50)
+    def execute_trade(self, symbol, signal, price, rsi):
+        # 🟢 منطق الشراء (BUY SPOT)
+        if signal == "BUY":
+            # شرط: لا نشتري إذا كنا نملك العملة بالفعل (نمنع التكرار حالياً)
+            if symbol in self.portfolio: return
             
-            if curr_price == 0: continue
+            # شرط: هل يوجد رصيد USDT كافٍ؟
+            if self.usdt_balance >= config.USDT_PER_TRADE:
+                amount = config.USDT_PER_TRADE / price
+                self.portfolio[symbol] = {'entry': price, 'amount': amount, 'time': datetime.now()}
+                self.usdt_balance -= config.USDT_PER_TRADE
+                
+                msg = (f"🟢 <b>HALAL BUY: {symbol}</b>\n"
+                       f"💵 Price: {price:.4f}\n"
+                       f"📉 RSI: {rsi:.2f}\n"
+                       f"🦅 Action: Own the asset (Spot)")
+                bot.send_news(msg)
+                print(msg)
+
+        # 🔴 منطق البيع (SELL SPOT)
+        elif signal == "SELL":
+            # شرط: يجب أن نكون مالكين للعملة لكي نبيعها
+            if symbol in self.portfolio:
+                data = self.portfolio[symbol]
+                # شرط ربحي: نبيع فقط بربح (أو وقف خسارة طفيف إذا انعكس السوق بقوة)
+                # هنا سنجعلها بسيطة: نبيع عند الإشارة
+                revenue = data['amount'] * price
+                pnl = revenue - config.USDT_PER_TRADE
+                
+                self.usdt_balance += revenue
+                del self.portfolio[symbol] # خروج من العملة
+                
+                icon = "💰" if pnl > 0 else "🛡️"
+                msg = (f"{icon} <b>HALAL SELL: {symbol}</b>\n"
+                       f"💵 Exit Price: {price:.4f}\n"
+                       f"💎 PnL: {pnl:.2f} USDT\n"
+                       f"⏱️ Held since: {data['time'].strftime('%H:%M')}")
+                bot.send_news(msg)
+
+    def scan_market(self):
+        print(f"🦅 Scanning Market... Balance: {self.usdt_balance:.2f} USDT")
+        
+        for symbol in config.TARGETS:
+            df = self.fetch_data(symbol)
+            if df is None: continue
             
-            pnl = 0; closed = False; reason = ""
+            signal, rsi = brain.analyze_market(df)
+            current_price = df['close'].iloc[-1]
             
-            if pos['type'] == 'LONG':
-                # 1️⃣ الذكاء في ملاحقة الربح (Trailing Stop)
-                if curr_price > pos['highest_price']:
-                    pos['highest_price'] = curr_price
-                    # معادلة ذكية: كلما صعد السعر، ارفع الوقف ليكون تحت القمة بمسافة ATR
-                    # هذا يضمن حجز الربح أولاً بأول
-                    new_sl = pos['highest_price'] - (pos['atr'] * 1.5)
-                    if new_sl > pos['sl']:
-                        pos['sl'] = new_sl
-                
-                # 2️⃣ الذكاء في الخروج (RSI Exhaustion)
-                # إذا وصل RSI لـ 75 (تشبع) وبدأ السعر ينزل، اخرج فوراً لا تنتظر الوقف
-                rsi_exit = (rsi > 75 and curr_price < pos['highest_price'] * 0.995)
-
-                # 3️⃣ تنفيذ الخروج
-                if curr_price <= pos['sl']: 
-                    pnl = (pos['sl'] - pos['entry']) * pos['qty']
-                    closed = True
-                    reason = "Trailing Stop (Profit Locked) 🛡️" if pnl > 0 else "Stop Loss 🛑"
-                
-                elif rsi_exit and (curr_price > pos['entry']): # نخرج بـ RSI فقط إذا كنا رابحين
-                    pnl = (curr_price - pos['entry']) * pos['qty']
-                    closed = True
-                    reason = "AI Exit (RSI Overbought) 🧠"
-
-            if closed:
-                self.balance += pnl
-                self.history.append({'pnl': pnl})
-                if pnl > 0: self.total_wins += 1
-                else: self.total_losses += 1
-                closed_trades.append((pos, pnl, reason))
-                del self.positions[sym]
-                
-        return closed_trades
-
-def get_yahoo_data(symbol):
-    try:
-        yahoo_symbol = symbol.replace('/', '-').replace('USDT', 'USD')
-        df = yf.download(yahoo_symbol, period='2d', interval='5m', progress=False, auto_adjust=True)
-        
-        if df.empty: return None, 0.0
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        df.columns = [c.capitalize() for c in df.columns]
-        
-        required = ['Open', 'High', 'Low', 'Close']
-        if not all(col in df.columns for col in required): return None, 0.0
-
-        price = df['Close'].iloc[-1]
-        
-        # حساب المؤشرات الذكية
-        df.ta.adx(high='High', low='Low', close='Close', length=14, append=True)
-        df.ta.rsi(close='Close', length=14, append=True)
-        df.ta.atr(high='High', low='Low', close='Close', length=14, append=True)
-        
-        return df, price
-    except:
-        return None, 0.0
+            # تنفيذ الأوامر
+            self.execute_trade(symbol, signal, current_price, rsi)
+            
+            # تقرير لمن يملك العملة حالياً (Trailing Check)
+            if symbol in self.portfolio:
+                entry = self.portfolio[symbol]['entry']
+                profit_pct = ((current_price - entry) / entry) * 100
+                if profit_pct > 1.5: # إذا الربح تجاوز 1.5%
+                     # هنا يمكن إضافة كود لرفع الوقف، لكن في السبوت ننتظر إشارة البيع من العقل
+                     pass
 
 def run_bot():
-    engine = TradingEngine()
-    bot.send_admin("🦅 <b>V38: AI INTELLIGENCE ACTIVE</b>\n- Logic: Dynamic Trailing Stop 🏃\n- Target: Unlimited 🚀\n- Exit: Smart Volatility Based")
+    bot.send_admin("🕌 <b>HALAL SPOT BOT STARTED</b>\n- Mode: Spot Only (No Leverage)\n- Strategy: Buy Dips, Sell Rips")
+    engine = HalalEngine()
     
-    last_msg_time = time.time()
+    # الفحص كل دقيقة (لأن السيرفر قوي)
+    schedule.every(30).seconds.do(engine.scan_market)
     
     while True:
         try:
+            schedule.run_pending()
+            
+            # تفقد أوامر تليجرام
             cmd = bot.get_updates()
             if cmd == "💰 الرصيد":
-                bot.send_admin(f"💰 Balance: {engine.balance:.2f}$")
+                # حساب قيمة المحفظة الكلية
+                total_assets = engine.usdt_balance
+                # إضافة قيمة العملات المفتوحة
+                for sym, data in engine.portfolio.items():
+                    # نحتاج سعر حالي تقريبي (نتجاهله هنا للسرعة ونحسب الدخول)
+                    total_assets += (data['amount'] * data['entry']) # تقريبي
+                
+                msg = (f"💰 <b>Islamic Portfolio</b>\n"
+                       f"💵 USDT Free: {engine.usdt_balance:.2f}\n"
+                       f"👜 Open Assets: {len(engine.portfolio)}\n"
+                       f"📊 Total Est: {total_assets:.2f} $")
+                bot.send_admin(msg)
+                
+            time.sleep(1)
             
-            # تجميع بيانات السوق الحالية
-            current_prices = {}
-            current_rsi = {}
-            
-            # مرحلة المسح (Scanning)
-            for symbol in config.TARGETS:
-                try:
-                    df, price = get_yahoo_data(symbol)
-                    if df is None: continue
-                    
-                    # حفظ البيانات للإدارة
-                    current_prices[symbol] = price
-                    if 'RSI_14' in df.columns:
-                        current_rsi[symbol] = df['RSI_14'].iloc[-1]
-                    else:
-                        current_rsi[symbol] = 50
-
-                    adx = df['ADX_14'].iloc[-1]
-                    
-                    # شروط الدخول (Entry Logic)
-                    if symbol not in engine.positions and adx > 20: # تريند بدأ يقوى
-                        atr = df['ATRr_14'].iloc[-1] if 'ATRr_14' in df.columns else (price*0.01)
-                        pos = engine.open_position(symbol, 'LONG', price, atr)
-                        
-                        if pos:
-                            msg = (
-                                f"🚀 <b>SMART ENTRY: {symbol}</b>\n"
-                                f"💵 Price: {price:.4f}\n"
-                                f"🛡️ Initial Stop: {pos['sl']:.4f}\n"
-                                f"🌊 Volatility (ATR): {atr:.4f}\n"
-                                f"<i>Target is OPEN. Trailing active.</i>"
-                            )
-                            # رسم توضيحي
-                            chart_slice = df.tail(40)
-                            img = painter.draw_entry_chart(chart_slice, price, pos['sl'], price*1.05, symbol, mode="ENTRY")
-                            if img:
-                                bot.send_photo(img, msg, bot_type='news')
-                                img.close(); del img
-                            else:
-                                bot.send_news(msg)
-                except Exception as e:
-                    print(f"Scan Error {symbol}: {e}")
-                    continue
-                gc.collect()
-
-            # مرحلة الإدارة الذكية (AI Management)
-            closed = engine.manage_positions(current_prices, current_rsi)
-            
-            for pos, pnl, reason in closed:
-                icon = "🤑" if pnl > 0 else "🔻"
-                bot.send_news(f"{icon} <b>AI CLOSED {pos['symbol']}</b>\n💵 PnL: {pnl:.2f}$\n🧠 Logic: {reason}")
-            
-            # رسالة نبض كل 15 دقيقة
-            if time.time() - last_msg_time > 900:
-                print("🦅 AI Brain is calculating...")
-                last_msg_time = time.time()
-
-            time.sleep(3)
-
         except Exception as e:
-            print(f"Main Loop Error: {e}")
+            print(f"Loop Error: {e}")
             time.sleep(5)
 
 if __name__ == "__main__":
     run_bot()
+ 
