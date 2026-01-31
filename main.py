@@ -1,15 +1,16 @@
 # main.py
-# V40: HALAL SPOT TRADER (Real Market Data) 🦅
+# V41: HALAL SPOT TRADER (No Dependencies) 🦅
 # -------------------------------------------------------------
 import ccxt
-import pandas as pd
+import pandas as pd  # 👈 فقط باندا العادية
 import time
 import schedule
 from datetime import datetime
 import config
 from telegram_bot import TelegramBot
 from ai_brain import QuantModel
-from vision import ChartPainter
+# from vision import ChartPainter  <-- سنعطل الرسام مؤقتاً لتخفيف الأحمال
+
 
 # تشغيل السيرفر للبقاء حياً
 try:
